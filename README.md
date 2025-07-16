@@ -79,9 +79,6 @@ Feature	Description
 ⚠️ Safe Serialization
 
 🖼 Screenshots
-## 🖼 Chat UI Preview
-
-## 🖼 Chat UI Preview
 
 ![Chat UI Screenshot](chat-preview.png)
 
