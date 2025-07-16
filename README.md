@@ -81,8 +81,7 @@ Feature	Description
 🖼 Screenshots
 ## 🖼 Chat UI Preview
 
-![Chat UI Screenshot](client/public/chat.png)
-
+![Chat UI Screenshot](./client/public/chat.png)
 
 📄 License
 This project is licensed for educational use under the MIT License.
