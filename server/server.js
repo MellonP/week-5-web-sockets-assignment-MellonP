@@ -1,132 +1,94 @@
-// server.js - Main server file for Socket.io chat application
-
+require('dotenv').config();
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 const cors = require('cors');
-const dotenv = require('dotenv');
-const path = require('path');
+const { createServer } = require('http');
+const { Server } = require('socket.io');
 
-// Load environment variables
-dotenv.config();
+// Nuclear data sanitizer - handles all edge cases
+function nuclearSanitize(data) {
+  const visited = new WeakSet();
+  
+  function sanitizer(key, value) {
+    // Handle circular references
+    if (typeof value === 'object' && value !== null) {
+      if (visited.has(value)) return '[Circular]';
+      visited.add(value);
+    }
+    
+    // Convert special objects
+    if (value instanceof Date) return value.toISOString();
+    if (value instanceof Map) return Array.from(value.entries());
+    if (value instanceof Set) return Array.from(value);
+    if (value instanceof ArrayBuffer) return Array.from(new Uint8Array(value));
+    if (ArrayBuffer.isView(value)) return Array.from(value);
+    if (typeof value === 'bigint') return value.toString();
+    if (value === undefined) return null;
+    
+    return value;
+  }
+  
+  return JSON.parse(JSON.stringify(data, sanitizer));
+}
 
-// Initialize Express app
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  methods: ['GET', 'POST']
+}));
+
+app.use(express.json({
+  limit: '10kb',
+  verify: (req, res, buf) => {
+    try {
+      nuclearSanitize(JSON.parse(buf.toString()));
+    } catch (e) {
+      throw new Error('Invalid data format');
+    }
+  }
+}));
+
+const httpServer = createServer(app);
+
+// Socket.IO with nuclear-proof serialization
+const io = new Server(httpServer, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
-    methods: ['GET', 'POST'],
-    credentials: true,
+    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    methods: ['GET', 'POST']
   },
+  // Force safe serialization
+  serialize: (payload) => {
+    return [JSON.stringify(nuclearSanitize(payload))];
+  }
 });
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Store connected users and messages
-const users = {};
-const messages = [];
-const typingUsers = {};
-
-// Socket.io connection handler
-io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}`);
-
-  // Handle user joining
-  socket.on('user_join', (username) => {
-    users[socket.id] = { username, id: socket.id };
-    io.emit('user_list', Object.values(users));
-    io.emit('user_joined', { username, id: socket.id });
-    console.log(`${username} joined the chat`);
-  });
-
-  // Handle chat messages
-  socket.on('send_message', (messageData) => {
-    const message = {
-      ...messageData,
-      id: Date.now(),
-      sender: users[socket.id]?.username || 'Anonymous',
-      senderId: socket.id,
-      timestamp: new Date().toISOString(),
-    };
-    
-    messages.push(message);
-    
-    // Limit stored messages to prevent memory issues
-    if (messages.length > 100) {
-      messages.shift();
+// Add safety wrapper to all sockets
+io.use((socket, next) => {
+  socket.nuclearEmit = (event, payload) => {
+    try {
+      const safe = nuclearSanitize(payload);
+      socket.emit(event, safe);
+    } catch (error) {
+      console.error('Nuclear emit failed:', error);
+      socket.emit('serialization_error', {
+        event,
+        error: 'Data could not be processed'
+      });
     }
-    
-    io.emit('receive_message', message);
-  });
-
-  // Handle typing indicator
-  socket.on('typing', (isTyping) => {
-    if (users[socket.id]) {
-      const username = users[socket.id].username;
-      
-      if (isTyping) {
-        typingUsers[socket.id] = username;
-      } else {
-        delete typingUsers[socket.id];
-      }
-      
-      io.emit('typing_users', Object.values(typingUsers));
-    }
-  });
-
-  // Handle private messages
-  socket.on('private_message', ({ to, message }) => {
-    const messageData = {
-      id: Date.now(),
-      sender: users[socket.id]?.username || 'Anonymous',
-      senderId: socket.id,
-      message,
-      timestamp: new Date().toISOString(),
-      isPrivate: true,
-    };
-    
-    socket.to(to).emit('private_message', messageData);
-    socket.emit('private_message', messageData);
-  });
-
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    if (users[socket.id]) {
-      const { username } = users[socket.id];
-      io.emit('user_left', { username, id: socket.id });
-      console.log(`${username} left the chat`);
-    }
-    
-    delete users[socket.id];
-    delete typingUsers[socket.id];
-    
-    io.emit('user_list', Object.values(users));
-    io.emit('typing_users', Object.values(typingUsers));
-  });
+  };
+  next();
 });
 
-// API routes
-app.get('/api/messages', (req, res) => {
-  res.json(messages);
+// Import socket setup AFTER safety measures
+const { setupSocket } = require('./socket/socketManager');
+setupSocket(io);
+
+// Error handling
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
-app.get('/api/users', (req, res) => {
-  res.json(Object.values(users));
-});
-
-// Root route
-app.get('/', (req, res) => {
-  res.send('Socket.io Chat Server is running');
-});
-
-// Start server
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+httpServer.listen(PORT, () => {
+  console.log(`Nuclear-safe server running on port ${PORT}`);
 });
-
-module.exports = { app, server, io }; 
